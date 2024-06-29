@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        #upload-container {
+            margin-bottom: 20px;
+        }
+        #upload-btn {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        #upload-btn:hover {
+            background-color: #45a049;
+        }
+        #visualizer {
+            background-color: #000;
+            border: 1px solid #333;
+            border-radius: 5px;
+        }
+        #file-name {
+            margin-top: 10px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div id="upload-container">
+        <input type="file" id="audioFile" accept="audio/*" style="display: none;">
+        <button id="upload-btn">Select file</button>
+    </div>
+    <div id="file-name"></div>
+    <canvas id="visualizer" width="800" height="400"></canvas>
+
+    <script>
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const canvas = document.getElementById('visualizer');
+        const canvasCtx = canvas.getContext('2d');
+        const uploadBtn = document.getElementById('upload-btn');
+        const audioFileInput = document.getElementById('audioFile');
+        const fileNameDisplay = document.getElementById('file-name');
+
+        uploadBtn.addEventListener('click', function() {
+            audioFileInput.click();
+        });
+
+        let windForce = 0;
+        let windChangeSpeed = 0.01;
+
+        class Particle {
+            constructor(x, y, color, size, speed) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = size;
+                this.speed = speed;
+                this.angle = Math.random() * Math.PI / 4 - Math.PI / 8;
+                this.vx = Math.cos(this.angle) * this.speed;
+                this.vy = -Math.sin(this.angle) * this.speed - 1;
+                this.lifetime = Math.random() * 30 + 20;
+                this.opacity = Math.random() * 0.5 + 0.5;
+            }
+
+            update(windForce) {
+                this.x += this.vx + windForce;
+                this.y += this.vy;
+                this.vy -= 0.02;
+                this.lifetime--;
+                this.size *= 0.97;
+                this.opacity *= 0.97;
+            }
+
+            draw(ctx) {
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.opacity;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        const particles = [];
+
+        audioFileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                fileNameDisplay.textContent = `Выбран файл: ${file.name}`;
+                const reader = new FileReader();
+
+                reader.onload = function(e) {
+                    const arrayBuffer = e.target.result;
+                    audioContext.decodeAudioData(arrayBuffer, function(buffer) {
+                        const source = audioContext.createBufferSource();
+                        source.buffer = buffer;
+
+                        const analyser = audioContext.createAnalyser();
+                        analyser.fftSize = 256;
+
+                        source.connect(analyser);
+                        analyser.connect(audioContext.destination);
+
+                        source.start(0);
+
+                        function draw() {
+                            requestAnimationFrame(draw);
+
+                            const bufferLength = analyser.frequencyBinCount;
+                            const dataArray = new Uint8Array(bufferLength);
+                            analyser.getByteFrequencyData(dataArray);
+
+                            canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+                            const centerX = canvas.width / 2;
+                            const centerY = canvas.height / 2;
+                            const a = canvas.width / 4 * 1.25;
+
+                            const bassFrequency = dataArray.slice(0, 10).reduce((a, b) => a + b, 0) / 10;
+                            windForce += (bassFrequency / 128 - 0.5) * windChangeSpeed;
+                            windForce = Math.max(-1, Math.min(1, windForce));
+
+                            for (let i = 0; i < bufferLength; i++) {
+                                const t = (i / bufferLength) * Math.PI * 2;
+                                const intensity = dataArray[i] * 0.5 * 1.25;
+                                drawBar(t, intensity, i / bufferLength, a);
+
+                                if (Math.random() < 0.1 && intensity > 50) {
+                                    const x = centerX + (a * Math.cos(t)) / (1 + Math.sin(t) ** 2);
+                                    const y = centerY + (a * Math.sin(t) * Math.cos(t)) / (1 + Math.sin(t) ** 2);
+                                    const color = Math.random() < 0.7 ? 'rgba(255,200,0,0.8)' : 'rgba(255,100,0,0.8)';
+                                    const size = Math.random() * 1.5 + 0.5; // Уменьшен размер частиц
+                                    const speed = Math.random() * 1 + 0.5;
+                                    particles.push(new Particle(x, y, color, size, speed));
+                                }
+                            }
+
+                            for (let i = particles.length - 1; i >= 0; i--) {
+                                particles[i].update(windForce);
+                                particles[i].draw(canvasCtx);
+                                if (particles[i].lifetime <= 0 || particles[i].opacity <= 0.01) {
+                                    particles.splice(i, 1);
+                                }
+                            }
+
+                            function drawBar(t, intensity, position, a) {
+                                const x1 = centerX + (a * Math.cos(t)) / (1 + Math.sin(t) ** 2);
+                                const y1 = centerY + (a * Math.sin(t) * Math.cos(t)) / (1 + Math.sin(t) ** 2);
+                                const x2 = centerX + ((a + intensity) * Math.cos(t)) / (1 + Math.sin(t) ** 2);
+                                const y2 = centerY + ((a + intensity) * Math.sin(t) * Math.cos(t)) / (1 + Math.sin(t) ** 2);
+                                
+                                // Изменяем цвет на красно-желтый диапазон
+                                const hue = 60 - position * 60; // от 60 (желтый) до 0 (красный)
+                                const gradient = canvasCtx.createLinearGradient(x1, y1, x2, y2);
+                                gradient.addColorStop(0, `hsla(${hue}, 100%, 50%, 1)`);
+                                gradient.addColorStop(1, `hsla(${hue}, 100%, 70%, 0.1)`);
+                                
+                                canvasCtx.strokeStyle = gradient;
+                                canvasCtx.lineWidth = 3;
+                                canvasCtx.beginPath();
+                                canvasCtx.moveTo(x1, y1);
+                                canvasCtx.lineTo(x2, y2);
+                                canvasCtx.stroke();
+                            }
+                        }
+
+                        draw();
+                    });
+                };
+
+                reader.readAsArrayBuffer(file);
+            }
+        });
+    </script>
+</body>
+</html>
